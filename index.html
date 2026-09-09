@@ -752,6 +752,7 @@
           <label class="field-label" for="email">Email Address *</label>
           <input class="field-input" type="email" id="email" name="email" placeholder="your@email.com" required>
           <p class="field-error">A valid email address is required.</p>
+          <p id="email-suggestion" style="display:none; cursor:pointer; color:#c8a951; font-size:13px; margin-top:4px;"></p>
         </div>
         <div class="field">
           <label class="field-label" for="address">Residential Address *</label>
@@ -1175,6 +1176,63 @@
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
+  // --- Email typo checking ---
+  // Catches common domain misspellings before submission (e.g. gmial.com,
+  // hotmial.com) rather than only after a welcome/confirmation email silently
+  // never arrives. Suggests a correction; never blocks submission on its own.
+  const COMMON_EMAIL_DOMAINS = [
+    'gmail.com', 'hotmail.com', 'outlook.com', 'yahoo.com', 'yahoo.com.au',
+    'live.com', 'icloud.com', 'bigpond.com', 'optusnet.com.au', 'iinet.net.au',
+    'internode.on.net', 'tpg.com.au', 'defence.gov.au'
+  ];
+  function levenshtein(a, b) {
+    const m = a.length, n = b.length;
+    const d = Array.from({ length: m + 1 }, (_, i) => [i, ...Array(n).fill(0)]);
+    for (let j = 0; j <= n; j++) d[0][j] = j;
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        d[i][j] = a[i - 1] === b[j - 1] ? d[i - 1][j - 1]
+          : 1 + Math.min(d[i - 1][j], d[i][j - 1], d[i - 1][j - 1]);
+      }
+    }
+    return d[m][n];
+  }
+  function suggestEmailDomain(email) {
+    const at = email.lastIndexOf('@');
+    if (at < 1 || at === email.length - 1) return null;
+    const domain = email.slice(at + 1).toLowerCase();
+    if (COMMON_EMAIL_DOMAINS.includes(domain)) return null;
+    let best = null, bestDist = Infinity;
+    for (const known of COMMON_EMAIL_DOMAINS) {
+      const dist = levenshtein(domain, known);
+      if (dist < bestDist) { bestDist = dist; best = known; }
+    }
+    // Only suggest for a close typo (1-2 char difference), not an unrelated domain
+    if (best && bestDist > 0 && bestDist <= 2 && domain.length >= best.length - 2) {
+      return email.slice(0, at + 1) + best;
+    }
+    return null;
+  }
+  (function initEmailTypoCheck() {
+    const emailField = document.getElementById('email');
+    const suggestionEl = document.getElementById('email-suggestion');
+    if (!emailField || !suggestionEl) return;
+    emailField.addEventListener('blur', () => {
+      const suggestion = suggestEmailDomain(emailField.value.trim());
+      if (suggestion) {
+        suggestionEl.textContent = `Did you mean ${suggestion}?`;
+        suggestionEl.style.display = 'block';
+        suggestionEl.onclick = () => {
+          emailField.value = suggestion;
+          suggestionEl.style.display = 'none';
+        };
+      } else {
+        suggestionEl.style.display = 'none';
+      }
+    });
+    emailField.addEventListener('input', () => { suggestionEl.style.display = 'none'; });
+  })();
+
   function validateStep(n) {
     const step = document.querySelector(`.step[data-step="${n}"]`);
     let ok = true;
@@ -1189,6 +1247,18 @@
     // Consent checkbox
     const consent = step.querySelector('#consent');
     if (consent && !consent.checked) { consent.classList.add('error'); ok = false; }
+
+    // Stricter email format check (step 1) — the browser's native type="email"
+    // validation is quite loose (e.g. accepts "a@b.c"); this matches the same
+    // pattern used server-side so a malformed address is caught here, not
+    // discovered later as a silently-lost lead.
+    if (n === 1) {
+      const emailField = step.querySelector('#email');
+      if (emailField && emailField.value.trim()) {
+        const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailField.value.trim());
+        if (!valid) { emailField.classList.add('error'); ok = false; }
+      }
+    }
 
     // Branch (step 2) — radio card group
     if (n === 2) {
